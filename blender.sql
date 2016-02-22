@@ -12,7 +12,7 @@
  Target Server Version : 90404
  File Encoding         : utf-8
 
- Date: 02/22/2016 14:11:04 PM
+ Date: 02/22/2016 16:25:52 PM
 */
 
 -- ----------------------------
@@ -337,9 +337,11 @@ CREATE FUNCTION "public"."importxmlnode"(IN xml, IN _varchar) RETURNS "bool"
 		childKeyList varchar[];
 		childTableName varchar;
 		textval varchar;
+		childNodes xml[];
+		variationValue varchar;
         BEGIN			--
 	
-	skiptables := ARRAY['custom-attribute','images', 'image-group', 'variation-attribute', 'variation-attribute-values', 'variations', 'attributes', 'alt'];
+	skiptables := ARRAY['custom-attribute','images', 'image-group', 'variation-attribute', 'variation-attribute-values', 'variations', 'attributes', 'alt', 'variants'];
 
 	DELETE FROM "_keyval";
 	SELECT (xpath('name()', $1))[1]::varchar INTO tableName;
@@ -462,12 +464,30 @@ CREATE FUNCTION "public"."importxmlnode"(IN xml, IN _varchar) RETURNS "bool"
 		END LOOP;
 	END IF;
 
-	IF tableName='image-group' THEN
+	IF tableName = 'image-group' THEN
+		SELECT ARRAY(SELECT getuniquenodeattributes(xpath('/n:image-group/n:variation',$1,'{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as attr) into keyList;
 
+		FOR rec IN SELECT UNNEST(keyList) as attr
+		LOOP
+			variationValue = (xpath('/n:image-group/n:variation/@' || rec.attr, $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar;
+			IF variationvalue is not null THEN
+				attrList := attrList || ARRAY[[('variation-' || rec.attr)::varchar, variationValue]];
+			END IF;
+		END LOOP;
+		
+		childNodes := xpath('/n:image-group/n:image', $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}');
+		FOR i IN array_lower(childNodes, 1) .. array_upper(childNodes, 1)
+		LOOP
+			perform importxmlnode(childNodes[i], attrList);
+		END LOOP;
 	ELSE
 		FOR rec IN select unnest(getnodechildnames($1)) as node
 		LOOP		
-			perform importxmlnode((xpath('/n:' || tableName || '/n:' || rec.node, $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1], attrList);			
+			childNodes := xpath('/n:' || tableName || '/n:' || rec.node, $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}');
+			FOR i IN array_lower(childNodes, 1) .. array_upper(childNodes, 1)
+			LOOP
+				perform importxmlnode(childNodes[i], attrList);
+			END LOOP;
 		END LOOP;
 	END IF;
 
