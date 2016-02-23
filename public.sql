@@ -12,7 +12,7 @@
  Target Server Version : 90404
  File Encoding         : utf-8
 
- Date: 02/23/2016 16:59:41 PM
+ Date: 02/23/2016 17:00:02 PM
 */
 
 -- ----------------------------
@@ -271,7 +271,7 @@ CREATE FUNCTION "public"."importcatalog"(IN varchar) RETURNS "bool"
 	FOR rec IN SELECT * FROM nodenames
 	LOOP
 
-		IF rec.tableName = 'product' THEN			
+		IF rec.tableName <> 'header' THEN			
 
 			FOR rec IN SELECT c as node FROM (Select unnest(xpath('//n:catalog/n:' || rec.tableName, c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as c from catalog) ca WHERE length(trim(regexp_replace(c::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0
 			LOOP
