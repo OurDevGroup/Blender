@@ -12,7 +12,7 @@
  Target Server Version : 90404
  File Encoding         : utf-8
 
- Date: 02/22/2016 16:25:52 PM
+ Date: 02/22/2016 22:52:53 PM
 */
 
 -- ----------------------------
@@ -133,7 +133,7 @@ CREATE FUNCTION "public"."getnodechildnames"(IN xml) RETURNS "_varchar"
 
 		select array(
 		SELECT DISTINCT (xpath('name()', child))[1]::varchar as attr FROM (
-		SELECT unnest(xpath('./child::node()[not(text()[normalize-space()]) and name() and not(name()="value")]', node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as "child") x
+		SELECT unnest(xpath('./child::node()[not(text()[normalize-space()]) and name() and not(name()="value") and (node() or @*)]', node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as "child") x
 WHERE 
 		length(trim(regexp_replace(child::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0
 ) into pParsed;
@@ -214,6 +214,34 @@ $BODY$
 ALTER FUNCTION "public"."getuniquenodeattributes"(IN _xml) OWNER TO "ryanrife";
 
 -- ----------------------------
+--  Function structure for public.emptytable(varchar)
+-- ----------------------------
+DROP FUNCTION IF EXISTS "public"."emptytable"(varchar);
+CREATE FUNCTION "public"."emptytable"(IN varchar) RETURNS "bool" 
+	AS $BODY$
+        DECLARE
+		
+        BEGIN		
+	
+	IF EXISTS (
+		SELECT *
+		FROM pg_catalog.pg_tables 
+		WHERE tablename  = $1
+	) THEN
+		EXECUTE 'DELETE FROM "' || $1 || '"';
+	END IF;		
+	
+	RETURN TRUE;
+	END;
+$BODY$
+	LANGUAGE plpgsql
+	COST 100
+	CALLED ON NULL INPUT
+	SECURITY INVOKER
+	VOLATILE;
+ALTER FUNCTION "public"."emptytable"(IN varchar) OWNER TO "ryanrife";
+
+-- ----------------------------
 --  Function structure for public.importcatalog(varchar)
 -- ----------------------------
 DROP FUNCTION IF EXISTS "public"."importcatalog"(varchar);
@@ -224,7 +252,7 @@ CREATE FUNCTION "public"."importcatalog"(IN varchar) RETURNS "bool"
 		tableName varchar;
         BEGIN		
 
-	--CREATE  TEMP TABLE rowVals (key character varying, val character varying, lang character varying) DROP ON COMMIT; 	
+	CREATE TEMP TABLE _keyval (key character varying, val character varying, lang character varying) ON COMMIT DROP;
 
 	CREATE TEMP TABLE catalog ON COMMIT DROP AS 
 		WITH cat AS (
@@ -235,6 +263,10 @@ CREATE FUNCTION "public"."importcatalog"(IN varchar) RETURNS "bool"
 		
 	perform emptytable('product');
 	perform emptytable('custom-attributes');
+	perform emptytable('image');
+	perform emptytable('variant');
+	perform emptytable('variation-attribute-value');
+	perform emptytable('page-attributes');
 
 	FOR rec IN SELECT * FROM nodenames
 	LOOP
@@ -268,34 +300,6 @@ $BODY$
 	SECURITY INVOKER
 	VOLATILE;
 ALTER FUNCTION "public"."importcatalog"(IN varchar) OWNER TO "ryanrife";
-
--- ----------------------------
---  Function structure for public.emptytable(varchar)
--- ----------------------------
-DROP FUNCTION IF EXISTS "public"."emptytable"(varchar);
-CREATE FUNCTION "public"."emptytable"(IN varchar) RETURNS "bool" 
-	AS $BODY$
-        DECLARE
-		
-        BEGIN		
-	
-	IF EXISTS (
-		SELECT *
-		FROM pg_catalog.pg_tables 
-		WHERE tablename  = $1
-	) THEN
-		EXECUTE 'DELETE FROM "' || $1 || '"';
-	END IF;		
-	
-	RETURN TRUE;
-	END;
-$BODY$
-	LANGUAGE plpgsql
-	COST 100
-	CALLED ON NULL INPUT
-	SECURITY INVOKER
-	VOLATILE;
-ALTER FUNCTION "public"."emptytable"(IN varchar) OWNER TO "ryanrife";
 
 -- ----------------------------
 --  Function structure for public.importimagegroupnode(xml, _varchar)
@@ -384,63 +388,36 @@ CREATE FUNCTION "public"."importxmlnode"(IN xml, IN _varchar) RETURNS "bool"
 			END IF;
 			perform addtableattr ( tableName, attrName );			
 
-			SELECT (xpath('@xml:lang', rec.node))[1]::varchar into xlang;
-			
+
 			textVal := null;
 			Select arrayVal into textVal from (SELECT array(select unnest(xpath('./n:value/text()', rec.node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))::varchar) arrayVal) x where array_length(arrayVal,1) > 0;	
 			if textVal is null then
 				SELECT (xpath('text()', rec.node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar into textval;
 			end if;
 
+			xlang := null;
+			SELECT (xpath('@xml:lang', rec.node))[1]::varchar into xlang;
+			IF xlang is null THEN
+				xlang := 'x-default';
+			END IF;
+
 			INSERT INTO "_keyval" (key, val,lang) VALUES (attrName, decodeentities(textval::varchar), xlang);
 
 		END LOOP;
-
-/*
-		FOR rec IN select node from (select unnest (xpath('/n:' || tableName || '/child::node()[not(./n:value/text()) and not(text()[normalize-space()]) and  not(node()) and not(@site-id)]', $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as node) n WHERE length(trim(regexp_replace(node::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0
-		LOOP
-			childTableName := (xpath('name()', rec.node))[1]::varchar;
-
-			childKeyList := ARRAY(SELECT getuniquenodeattributes(xpath('.',rec.node)) as attr);
-
-			if childTableName is not null and childKeyList is not null and array_length(childKeyList,1) > 0 then
-				FOR i IN array_lower(childKeyList, 1) .. array_upper(childKeyList, 1)
-				LOOP
-					textVal :=  (xpath('/n:' || childTableName || '/@' || childKeyList[i], rec.node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar;
-
-					if childTableName = 'variant' and childKeyList[i] = 'product-id' then
-						perform addtableattr ( tableName, 'variant-product-id' );
-						INSERT INTO "_keyval" (key, val,lang) VALUES ('variant-product-id', decodeentities(textVal), null);
-					else
-						perform addtableattr ( tableName, childKeyList[i] );
-						INSERT INTO "_keyval" (key, val,lang) VALUES (attrName, decodeentities(textVal), null);
-					end if;
-					
-					
-				END LOOP;
-			end if;
-		END LOOP;
-*/
 
 
 		perform addtableattr ( tableName, 'x-lang' );
 
 		
-		SELECT string_agg('"' || key::varchar || '"', ', ') into cols FROM "_keyval" where key is not null and (lang is null or lang = 'x-default');
-		SELECT string_agg('''' || replace(val::varchar, '''', '''''') || '''', ', ') into vals FROM "_keyval" where key is not null and (lang is null or lang = 'x-default');
-
-		EXECUTE 'INSERT INTO "' || tableName || '" (' || cols || ', "x-lang") VALUES (' || vals || ', ''x-default'');';
-		
-		--import alternate languages
-		
-		FOR rec in SELECT DISTINCT lang FROM "_keyval" where (lang is not null and lang <> 'x-default')
+		FOR rec in SELECT DISTINCT lang FROM "_keyval" where lang is not null
 		LOOP	
 			
-			select rec.lang into xlang;
-			select string_agg('"' || key::varchar || '"', ', ') into cols FROM "_keyval" where key is not null and lang = rec.lang;
-			select string_agg('''' || replace(val::varchar, '''', '''''') || '''', ', ') into vals FROM "_keyval" where key is not null and lang = rec.lang;
+			xlang := rec.lang;
 
-			FOR rec IN SELECT UNNEST(keyList) as attr
+			select string_agg('"' || key::varchar || '"', ', ') into cols FROM "_keyval" where key is not null and (lang = xlang or lang is null);
+			select string_agg('''' || replace(val::varchar, '''', '''''') || '''', ', ') into vals FROM "_keyval" where key is not null and (lang = xlang or lang is null);
+
+			/*FOR rec IN SELECT UNNEST(keyList) as attr
 			LOOP
 				SELECT cols || ', "' || rec.attr || '"'  into cols;
 				IF(rec.attr = 'variant-product-id') THEN
@@ -448,10 +425,10 @@ CREATE FUNCTION "public"."importxmlnode"(IN xml, IN _varchar) RETURNS "bool"
 				ELSE
 					SELECT vals || ', ''' || replace((xpath('./@' || rec.attr, $1))[1]::varchar,'''','''''') || ''''  into vals;
 				END IF;
-			END LOOP;
+			END LOOP;*/
 
 			execute 'INSERT INTO "' || tableName || '" (' || cols || ', "x-lang") VALUES (' || vals || ', ''' || xlang || ''');';
-			--insert into data(text) values( 'INSERT INTO "' || tableName || '" (' || cols || ', "x-lang") VALUES (' || vals || ', ''' || rec.lang || ''');');
+			--insert into data(text) values( 'INSERT INTO "' || tableName || '" (' || cols || ', "x-lang") VALUES (' || vals || ', ''' || xlang || ''');');
 		END LOOP;
 		
 		--insert into "_keyval" (key) values (cols);
@@ -502,16 +479,4 @@ $BODY$
 	SECURITY INVOKER
 	VOLATILE;
 ALTER FUNCTION "public"."importxmlnode"(IN xml, IN _varchar) OWNER TO "ryanrife";
-
--- ----------------------------
---  Table structure for _keyval
--- ----------------------------
-DROP TABLE IF EXISTS "public"."_keyval";
-CREATE TABLE "public"."_keyval" (
-	"key" varchar COLLATE "default",
-	"val" varchar COLLATE "default",
-	"lang" varchar COLLATE "default"
-)
-WITH (OIDS=FALSE);
-ALTER TABLE "public"."_keyval" OWNER TO "ryanrife";
 
