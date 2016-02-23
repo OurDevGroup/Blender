@@ -12,7 +12,7 @@
  Target Server Version : 90404
  File Encoding         : utf-8
 
- Date: 02/22/2016 22:52:53 PM
+ Date: 02/23/2016 09:51:10 AM
 */
 
 -- ----------------------------
@@ -119,6 +119,146 @@ $BODY$
 	SECURITY INVOKER
 	STABLE;
 ALTER FUNCTION "public"."decodeentities"(IN html varchar) OWNER TO "ryanrife";
+
+-- ----------------------------
+--  Function structure for public.importxmlnode(xml, varchar, _varchar)
+-- ----------------------------
+DROP FUNCTION IF EXISTS "public"."importxmlnode"(xml, varchar, _varchar);
+CREATE FUNCTION "public"."importxmlnode"(IN xml, IN varchar, IN _varchar) RETURNS "bool" 
+	AS $BODY$
+        DECLARE
+		skiptables varchar[] := ARRAY['custom-attribute','images', 'image-group', 'variation-attribute', 'variation-attribute-values', 'variations', 'attributes', 'alt', 'variants', 'refinement-definitions', 'attribute-groups'];
+		parenttables varchar[] := ARRAY['product','category'];
+		rec record;
+		tableName varchar;
+		attrName varchar;
+		cols varchar;
+		vals varchar;
+		xlang varchar;
+		attrList varchar[][];
+		keyList varchar[];
+		childKeyList varchar[];
+		childTableName varchar;
+		textval varchar;
+		parentTable ALIAS FOR $2;
+		sqlTable varchar;
+        BEGIN			
+	
+	DELETE FROM "_keyval";
+	SELECT (xpath('name()', $1))[1]::varchar INTO tableName;
+	SELECT $3 into attrList;
+
+	IF tableName = ANY(parenttables::varchar[]) THEN
+		parentTable := tableName;
+		sqlTable := tableName;
+	ELSE
+		sqlTable := (SELECT CASE WHEN parentTable IS NULL THEN tableName ELSE parentTable || '-' || tableName END);
+	END IF;
+
+	
+
+	if NOT(tableName = ANY(skiptables::varchar[])) then
+
+		perform createTableNode ( sqlTable );
+
+		SELECT ARRAY(SELECT getuniquenodeattributes(xpath('.',$1)) as attr) into keyList;
+
+		FOR rec IN SELECT UNNEST(keyList) as attr
+		LOOP			
+			attrList := attrList || ARRAY[[rec.attr, (xpath('/n:' || tableName || '/@' || rec.attr, $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar]];
+			if(tableName = 'variant' and rec.attr = 'product-id') then
+				perform addtableattr ( sqlTable, 'variant-product-id' );
+				INSERT INTO "_keyval" (key, val) VALUES ('variant-product-id', (xpath('/n:' || tableName || '/@product-id', $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar);
+				keyList := array_append(keyList, 'variant-product-id');
+			else
+				perform addtableattr ( sqlTable, rec.attr );
+				INSERT INTO "_keyval" (key, val) VALUES (rec.attr, (xpath('/n:' || tableName || '/@' || rec.attr, $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar);
+			end if;
+		END LOOP;
+
+		IF $3 is not null THEN
+			FOR i IN array_lower($3, 1) .. array_upper($3, 1)
+			LOOP
+				perform addtableattr ( sqlTable, $3[i][1] );
+				INSERT INTO "_keyval" (key, val) VALUES ($3[i][1], $3[i][2]);	
+			END LOOP;
+		END IF;
+
+		FOR rec IN select node from (select unnest (xpath('/n:' || tableName || '/child::node()[(./n:value/text() or text()[normalize-space()]) and not(@site-id)]', $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as node) n WHERE length(trim(regexp_replace(node::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0
+		LOOP	
+			
+			IF (xpath('name()', rec.node))[1]::varchar = 'custom-attribute' THEN
+				SELECT (xpath('@attribute-id', rec.node))[1]::varchar into attrName;
+			ELSE
+				SELECT (xpath('name()', rec.node))[1]::varchar into attrName;
+			END IF;
+			perform addtableattr ( sqlTable, attrName );			
+
+			SELECT (xpath('@xml:lang', rec.node))[1]::varchar into xlang;
+			
+			textVal := null;
+			Select arrayVal into textVal from (SELECT array(select unnest(xpath('./n:value/text()', rec.node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))::varchar) arrayVal) x where array_length(arrayVal,1) > 0;	
+			if textVal is null then
+				SELECT (xpath('text()', rec.node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar into textval;
+			end if;
+
+			INSERT INTO "_keyval" (key, val,lang) VALUES (attrName, decodeentities(textval::varchar), xlang);
+
+		END LOOP;
+
+		perform addtableattr ( sqlTable , 'x-lang' );
+
+		
+		SELECT string_agg('"' || key::varchar || '"', ', ') into cols FROM "_keyval" where key is not null and (lang is null or lang = 'x-default');
+		SELECT string_agg('''' || replace(val::varchar, '''', '''''') || '''', ', ') into vals FROM "_keyval" where key is not null and (lang is null or lang = 'x-default');
+
+		EXECUTE 'INSERT INTO "' || sqlTable || '" (' || cols || ', "x-lang") VALUES (' || vals || ', ''x-default'');';
+		
+		FOR rec in SELECT DISTINCT lang FROM "_keyval" where (lang is not null and lang <> 'x-default')
+		LOOP	
+			
+			select rec.lang into xlang;
+			select string_agg('"' || key::varchar || '"', ', ') into cols FROM "_keyval" where key is not null and lang = rec.lang;
+			select string_agg('''' || replace(val::varchar, '''', '''''') || '''', ', ') into vals FROM "_keyval" where key is not null and lang = rec.lang;
+
+			FOR rec IN SELECT UNNEST(keyList) as attr
+			LOOP
+				SELECT cols || ', "' || rec.attr || '"'  into cols;
+				IF(rec.attr = 'variant-product-id') THEN
+					SELECT vals || ', ''' || replace((xpath('./@product-id', $1))[1]::varchar,'''','''''') || ''''  into vals;
+				ELSE
+					SELECT vals || ', ''' || replace((xpath('./@' || rec.attr, $1))[1]::varchar,'''','''''') || ''''  into vals;
+				END IF;
+			END LOOP;
+
+			execute 'INSERT INTO "' || sqlTable || '" (' || cols || ', "x-lang") VALUES (' || vals || ', ''' || xlang || ''');';
+			--insert into data(text) values( 'INSERT INTO "' || tableName || '" (' || cols || ', "x-lang") VALUES (' || vals || ', ''' || rec.lang || ''');');
+		END LOOP;
+		
+	ELSE	
+		SELECT ARRAY(SELECT getuniquenodeattributes(xpath('.',$1)) as attr) into keyList;
+
+		FOR rec IN SELECT UNNEST(keyList) as attr
+		LOOP
+			attrList := attrList || ARRAY[[rec.attr, (xpath('/n:' || tableName || '/@' || rec.attr, $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar]];
+		END LOOP;
+	END IF;
+
+
+	FOR rec IN select unnest(getnodechildnames($1)) as node
+	LOOP		
+		perform importxmlnode((xpath('/n:' || tableName || '/n:' || rec.node, $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1], parentTable, attrList);			
+	END LOOP;
+	
+	RETURN TRUE;
+	END;
+$BODY$
+	LANGUAGE plpgsql
+	COST 100
+	CALLED ON NULL INPUT
+	SECURITY INVOKER
+	VOLATILE;
+ALTER FUNCTION "public"."importxmlnode"(IN xml, IN varchar, IN _varchar) OWNER TO "ryanrife";
 
 -- ----------------------------
 --  Function structure for public.getnodechildnames(xml)
@@ -262,28 +402,28 @@ CREATE FUNCTION "public"."importcatalog"(IN varchar) RETURNS "bool"
 	CREATE TEMP TABLE nodenames on COMMIT DROP AS SELECT DISTINCT (xpath('name()', c))[1]::varchar as tableName FROM (Select unnest(xpath('//n:catalog/node()', c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as c from catalog) ca WHERE length(trim(regexp_replace(c::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0;
 		
 	perform emptytable('product');
-	perform emptytable('custom-attributes');
-	perform emptytable('image');
-	perform emptytable('variant');
-	perform emptytable('variation-attribute-value');
-	perform emptytable('page-attributes');
+	perform emptytable('product-custom-attributes');
+	--perform emptytable('image');
+	perform emptytable('product-variant');
+	perform emptytable('product-variation-attribute-value');
+	perform emptytable('product-page-attributes');
 
 	FOR rec IN SELECT * FROM nodenames
 	LOOP
 		
 		
 
-		IF rec.tableName = 'product' THEN			
+	IF rec.tableName <> 'header' THEN			
 
-			FOR rec IN SELECT c as node FROM (Select unnest(xpath('//n:catalog/n:product', c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as c from catalog) ca WHERE length(trim(regexp_replace(c::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0
+			FOR rec IN SELECT c as node FROM (Select unnest(xpath('//n:catalog/n:' || rec.tableName, c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as c from catalog) ca WHERE length(trim(regexp_replace(c::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0
 			LOOP
 
-				perform importXmlNode ( rec.node, null); --, ARRAY[['product-id', (xpath('/n:product/@product-id', rec.node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar ]] );	
+				perform importXmlNode ( rec.node, null, null); --, ARRAY[['product-id', (xpath('/n:product/@product-id', rec.node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar ]] );	
 				
 
 				 
 			END LOOP;
-		END IF;
+	END IF;
 
 	END LOOP;
 
@@ -321,162 +461,4 @@ END;$BODY$
 	SECURITY INVOKER
 	VOLATILE;
 ALTER FUNCTION "public"."importimagegroupnode"(IN xml, IN _varchar) OWNER TO "ryanrife";
-
--- ----------------------------
---  Function structure for public.importxmlnode(xml, _varchar)
--- ----------------------------
-DROP FUNCTION IF EXISTS "public"."importxmlnode"(xml, _varchar);
-CREATE FUNCTION "public"."importxmlnode"(IN xml, IN _varchar) RETURNS "bool" 
-	AS $BODY$
-        DECLARE
-		skiptables varchar[];
-		rec record;
-		tableName varchar;
-		attrName varchar;
-		cols varchar;
-		vals varchar;
-		xlang varchar;
-		attrList varchar[][];
-		keyList varchar[];
-		childKeyList varchar[];
-		childTableName varchar;
-		textval varchar;
-		childNodes xml[];
-		variationValue varchar;
-        BEGIN			--
-	
-	skiptables := ARRAY['custom-attribute','images', 'image-group', 'variation-attribute', 'variation-attribute-values', 'variations', 'attributes', 'alt', 'variants'];
-
-	DELETE FROM "_keyval";
-	SELECT (xpath('name()', $1))[1]::varchar INTO tableName;
-	SELECT $2 into attrList;
-
-	if NOT(tableName = ANY(skiptables::varchar[])) then
-		perform createTableNode ( tableName );
-
-		SELECT ARRAY(SELECT getuniquenodeattributes(xpath('.',$1)) as attr) into keyList;
-
-		FOR rec IN SELECT UNNEST(keyList) as attr
-		LOOP			
-			attrList := attrList || ARRAY[[rec.attr, (xpath('/n:' || tableName || '/@' || rec.attr, $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar]];
-			if(tableName = 'variant' and rec.attr = 'product-id') then
-				perform addtableattr ( tableName, 'variant-product-id' );
-				INSERT INTO "_keyval" (key, val) VALUES ('variant-product-id', (xpath('/n:' || tableName || '/@product-id', $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar);
-				keyList := array_append(keyList, 'variant-product-id');
-			else
-				perform addtableattr ( tableName, rec.attr );
-				INSERT INTO "_keyval" (key, val) VALUES (rec.attr, (xpath('/n:' || tableName || '/@' || rec.attr, $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar);
-			end if;
-		END LOOP;
-
-		IF $2 is not null THEN
-			FOR i IN array_lower($2, 1) .. array_upper($2, 1)
-			LOOP
-				perform addtableattr ( tableName, $2[i][1] );
-				INSERT INTO "_keyval" (key, val) VALUES ($2[i][1], $2[i][2]);	
-			END LOOP;
-		END IF;
-
-	-- and (not(@xml:lang) or @xml:lang="x-default") 
-		FOR rec IN select node from (select unnest (xpath('/n:' || tableName || '/child::node()[(./n:value/text() or text()[normalize-space()]) and not(@site-id)]', $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as node) n WHERE length(trim(regexp_replace(node::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0
-		LOOP	
-			
-			IF (xpath('name()', rec.node))[1]::varchar = 'custom-attribute' THEN
-				SELECT (xpath('@attribute-id', rec.node))[1]::varchar into attrName;
-			ELSE
-				SELECT (xpath('name()', rec.node))[1]::varchar into attrName;
-			END IF;
-			perform addtableattr ( tableName, attrName );			
-
-
-			textVal := null;
-			Select arrayVal into textVal from (SELECT array(select unnest(xpath('./n:value/text()', rec.node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))::varchar) arrayVal) x where array_length(arrayVal,1) > 0;	
-			if textVal is null then
-				SELECT (xpath('text()', rec.node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar into textval;
-			end if;
-
-			xlang := null;
-			SELECT (xpath('@xml:lang', rec.node))[1]::varchar into xlang;
-			IF xlang is null THEN
-				xlang := 'x-default';
-			END IF;
-
-			INSERT INTO "_keyval" (key, val,lang) VALUES (attrName, decodeentities(textval::varchar), xlang);
-
-		END LOOP;
-
-
-		perform addtableattr ( tableName, 'x-lang' );
-
-		
-		FOR rec in SELECT DISTINCT lang FROM "_keyval" where lang is not null
-		LOOP	
-			
-			xlang := rec.lang;
-
-			select string_agg('"' || key::varchar || '"', ', ') into cols FROM "_keyval" where key is not null and (lang = xlang or lang is null);
-			select string_agg('''' || replace(val::varchar, '''', '''''') || '''', ', ') into vals FROM "_keyval" where key is not null and (lang = xlang or lang is null);
-
-			/*FOR rec IN SELECT UNNEST(keyList) as attr
-			LOOP
-				SELECT cols || ', "' || rec.attr || '"'  into cols;
-				IF(rec.attr = 'variant-product-id') THEN
-					SELECT vals || ', ''' || replace((xpath('./@product-id', $1))[1]::varchar,'''','''''') || ''''  into vals;
-				ELSE
-					SELECT vals || ', ''' || replace((xpath('./@' || rec.attr, $1))[1]::varchar,'''','''''') || ''''  into vals;
-				END IF;
-			END LOOP;*/
-
-			execute 'INSERT INTO "' || tableName || '" (' || cols || ', "x-lang") VALUES (' || vals || ', ''' || xlang || ''');';
-			--insert into data(text) values( 'INSERT INTO "' || tableName || '" (' || cols || ', "x-lang") VALUES (' || vals || ', ''' || xlang || ''');');
-		END LOOP;
-		
-		--insert into "_keyval" (key) values (cols);
-	ELSE	
-		SELECT ARRAY(SELECT getuniquenodeattributes(xpath('.',$1)) as attr) into keyList;
-
-		FOR rec IN SELECT UNNEST(keyList) as attr
-		LOOP
-			attrList := attrList || ARRAY[[rec.attr, (xpath('/n:' || tableName || '/@' || rec.attr, $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar]];
-		END LOOP;
-	END IF;
-
-	IF tableName = 'image-group' THEN
-		SELECT ARRAY(SELECT getuniquenodeattributes(xpath('/n:image-group/n:variation',$1,'{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as attr) into keyList;
-
-		FOR rec IN SELECT UNNEST(keyList) as attr
-		LOOP
-			variationValue = (xpath('/n:image-group/n:variation/@' || rec.attr, $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar;
-			IF variationvalue is not null THEN
-				attrList := attrList || ARRAY[[('variation-' || rec.attr)::varchar, variationValue]];
-			END IF;
-		END LOOP;
-		
-		childNodes := xpath('/n:image-group/n:image', $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}');
-		FOR i IN array_lower(childNodes, 1) .. array_upper(childNodes, 1)
-		LOOP
-			perform importxmlnode(childNodes[i], attrList);
-		END LOOP;
-	ELSE
-		FOR rec IN select unnest(getnodechildnames($1)) as node
-		LOOP		
-			childNodes := xpath('/n:' || tableName || '/n:' || rec.node, $1, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}');
-			FOR i IN array_lower(childNodes, 1) .. array_upper(childNodes, 1)
-			LOOP
-				perform importxmlnode(childNodes[i], attrList);
-			END LOOP;
-		END LOOP;
-	END IF;
-
-	
-	
-	RETURN TRUE;
-	END;
-$BODY$
-	LANGUAGE plpgsql
-	COST 100
-	CALLED ON NULL INPUT
-	SECURITY INVOKER
-	VOLATILE;
-ALTER FUNCTION "public"."importxmlnode"(IN xml, IN _varchar) OWNER TO "ryanrife";
 
