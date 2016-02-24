@@ -23,3 +23,5 @@ After several minutes, the catalog should be fully imported into the blender sch
 Limitations
 -----------
 -Currently does not support site-specific attribute values
+-PKs & FKs are not configured
+-All values are imported at varchar
