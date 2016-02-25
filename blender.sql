@@ -1,33 +1,7 @@
 CREATE SCHEMA IF NOT EXISTS blender;
 
 -- ----------------------------
---  Function structure for public.addtableattr(varchar, varchar)
--- ----------------------------
-DROP FUNCTION IF EXISTS "blender"."addtableattr"(varchar, varchar);
-CREATE FUNCTION "blender"."addtableattr"(IN varchar, IN varchar) RETURNS "bool" 
-	AS $BODY$
-        DECLARE
-				
-        BEGIN
-		
-	IF NOT EXISTS (SELECT $2 
-               FROM information_schema.columns 
-               WHERE table_schema='public' and table_name=$1 and column_name=$2) THEN
-		EXECUTE 'ALTER TABLE "' || $1 || '" ADD COLUMN "' || $2 || '" character varying';
-	END IF;
-	
-	RETURN TRUE;
-	END;
-$BODY$
-	LANGUAGE plpgsql
-	COST 100
-	CALLED ON NULL INPUT
-	SECURITY INVOKER
-	VOLATILE;
-ALTER FUNCTION "blender"."addtableattr"(IN varchar, IN varchar) OWNER TO "ryanrife";
-
--- ----------------------------
---  Function structure for public.getnodeattributes(xml)
+--  Function structure for blender.getnodeattributes(xml)
 -- ----------------------------
 DROP FUNCTION IF EXISTS "blender"."getnodeattributes"(xml);
 CREATE FUNCTION "blender"."getnodeattributes"(IN xml)
@@ -55,7 +29,7 @@ $BODY$
 ALTER FUNCTION "blender"."getnodeattributes"(IN xml) OWNER TO "ryanrife";
 
 -- ----------------------------
---  Function structure for public.createtablenode(varchar)
+--  Function structure for blender.createtablenode(varchar)
 -- ----------------------------
 DROP FUNCTION IF EXISTS "blender"."createtablenode"(varchar);
 CREATE FUNCTION "blender"."createtablenode"(IN varchar) RETURNS "bool" 
@@ -83,7 +57,7 @@ $BODY$
 ALTER FUNCTION "blender"."createtablenode"(IN varchar) OWNER TO "ryanrife";
 
 -- ----------------------------
---  Function structure for public.decodeentities(varchar)
+--  Function structure for blender.decodeentities(varchar)
 -- ----------------------------
 DROP FUNCTION IF EXISTS "blender"."decodeentities"(varchar);
 CREATE FUNCTION "blender"."decodeentities"(IN html varchar) RETURNS "varchar" 
@@ -106,7 +80,149 @@ $BODY$
 ALTER FUNCTION "blender"."decodeentities"(IN html varchar) OWNER TO "ryanrife";
 
 -- ----------------------------
---  Function structure for public.importcatalogxmlnode(xml, varchar, _varchar)
+--  Function structure for blender.getnodechildnames(xml)
+-- ----------------------------
+DROP FUNCTION IF EXISTS "blender"."getnodechildnames"(xml);
+CREATE FUNCTION "blender"."getnodechildnames"(IN xml) RETURNS "_varchar" 
+	AS $BODY$
+        DECLARE
+                pParsed         varchar[];
+                node         	ALIAS FOR $1;
+        BEGIN		
+
+		select array(
+		SELECT DISTINCT (xpath('name()', child))[1]::varchar as attr FROM (
+		SELECT unnest(xpath('./child::node()[not(text()[normalize-space()]) and name() and not(name()="value") and (node() or @*)]', node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as "child") x
+WHERE 
+		length(trim(regexp_replace(child::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0
+) into pParsed;
+/* 
+		
+*/
+		return pParsed;
+	END;
+$BODY$
+	LANGUAGE plpgsql
+	COST 100
+	CALLED ON NULL INPUT
+	SECURITY INVOKER
+	VOLATILE;
+ALTER FUNCTION "blender"."getnodechildnames"(IN xml) OWNER TO "ryanrife";
+
+-- ----------------------------
+--  Function structure for blender.getnodeattributenames(xml)
+-- ----------------------------
+DROP FUNCTION IF EXISTS "blender"."getnodeattributenames"(xml);
+CREATE FUNCTION "blender"."getnodeattributenames"(IN xml) RETURNS "_varchar" 
+	AS $BODY$
+        DECLARE
+                pParsed         varchar[];
+                node         	ALIAS FOR $1;		
+        BEGIN		
+
+		select array(
+		SELECT DISTINCT (xpath('name()', child))[1]::varchar as attr FROM (
+		SELECT unnest(xpath('./child::node()[text()[normalize-space()]]', node)) as "child") x
+WHERE 
+		length(trim(regexp_replace(child::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0
+) into pParsed;
+/* 
+		
+*/
+		return pParsed;
+	END;
+$BODY$
+	LANGUAGE plpgsql
+	COST 100
+	CALLED ON NULL INPUT
+	SECURITY INVOKER
+	VOLATILE;
+ALTER FUNCTION "blender"."getnodeattributenames"(IN xml) OWNER TO "ryanrife";
+
+-- ----------------------------
+--  Function structure for blender.getuniquenodeattributes(_xml)
+-- ----------------------------
+DROP FUNCTION IF EXISTS "blender"."getuniquenodeattributes"(_xml);
+CREATE FUNCTION "blender"."getuniquenodeattributes"(IN _xml)
+ RETURNS TABLE("attribute" varchar) AS
+$BODY$
+        DECLARE
+		rec record;
+		tableName varchar;
+        BEGIN			
+
+	select (xpath('name()', $1[1], '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar into tableName;
+
+	RETURN QUERY select distinct attributes[1] as attribute from (select 
+		regexp_split_to_array(
+		replace(
+		(regexp_matches(replace((regexp_matches($1::varchar,'(<' || tableName || '\s.*?>)','g'))[1], '\"','"')
+		,'((\w|\w-\w)*\s*=\s*"[^"]*"|''[^'']*'')','g'))[1]::varchar
+		,'"','')
+		,'=')::varchar[] as attributes
+		) x where attributes[1] <> 'xmlns' and attributes[1] <> 'lang';
+	
+	END;
+$BODY$
+	LANGUAGE plpgsql
+	COST 100
+	ROWS 100
+	CALLED ON NULL INPUT
+	SECURITY INVOKER
+	STABLE;
+ALTER FUNCTION "blender"."getuniquenodeattributes"(IN _xml) OWNER TO "ryanrife";
+
+-- ----------------------------
+--  Function structure for blender.emptytable(varchar)
+-- ----------------------------
+DROP FUNCTION IF EXISTS "blender"."emptytable"(varchar);
+CREATE FUNCTION "blender"."emptytable"(IN varchar) RETURNS "bool" 
+	AS $BODY$
+        DECLARE
+		
+        BEGIN		
+	
+	IF EXISTS (
+		SELECT *
+		FROM pg_catalog.pg_tables 
+		WHERE tablename  = $1
+	) THEN
+		EXECUTE 'DELETE FROM "' || $1 || '"';
+	END IF;		
+	
+	RETURN TRUE;
+	END;
+$BODY$
+	LANGUAGE plpgsql
+	COST 100
+	CALLED ON NULL INPUT
+	SECURITY INVOKER
+	VOLATILE;
+ALTER FUNCTION "blender"."emptytable"(IN varchar) OWNER TO "ryanrife";
+
+-- ----------------------------
+--  Function structure for blender.importimagegroupnode(xml, _varchar)
+-- ----------------------------
+DROP FUNCTION IF EXISTS "blender"."importimagegroupnode"(xml, _varchar);
+CREATE FUNCTION "blender"."importimagegroupnode"(IN xml, IN _varchar) RETURNS "bool" 
+	AS $BODY$DECLARE
+
+BEGIN
+
+select * from image;
+
+
+	RETURN true;
+END;$BODY$
+	LANGUAGE plpgsql
+	COST 100
+	CALLED ON NULL INPUT
+	SECURITY INVOKER
+	VOLATILE;
+ALTER FUNCTION "blender"."importimagegroupnode"(IN xml, IN _varchar) OWNER TO "ryanrife";
+
+-- ----------------------------
+--  Function structure for blender.importcatalogxmlnode(xml, varchar, _varchar)
 -- ----------------------------
 DROP FUNCTION IF EXISTS "blender"."importcatalogxmlnode"(xml, varchar, _varchar);
 CREATE FUNCTION "blender"."importcatalogxmlnode"(IN xml, IN varchar, IN _varchar) RETURNS "bool" 
@@ -233,9 +349,6 @@ BEGIN
 	END LOOP;
 	
 	RETURN TRUE;
-EXCEPTION WHEN OTHERS THEN
-        RAISE NOTICE 'failed to import %', $1::varchar;
-        RETURN TRUE;
 END;$BODY$
 	LANGUAGE plpgsql
 	COST 100
@@ -245,115 +358,20 @@ END;$BODY$
 ALTER FUNCTION "blender"."importcatalogxmlnode"(IN xml, IN varchar, IN _varchar) OWNER TO "ryanrife";
 
 -- ----------------------------
---  Function structure for public.getnodechildnames(xml)
+--  Function structure for blender.addtableattr(varchar, varchar)
 -- ----------------------------
-DROP FUNCTION IF EXISTS "blender"."getnodechildnames"(xml);
-CREATE FUNCTION "blender"."getnodechildnames"(IN xml) RETURNS "_varchar" 
+DROP FUNCTION IF EXISTS "blender"."addtableattr"(varchar, varchar);
+CREATE FUNCTION "blender"."addtableattr"(IN varchar, IN varchar) RETURNS "bool" 
 	AS $BODY$
         DECLARE
-                pParsed         varchar[];
-                node         	ALIAS FOR $1;
-        BEGIN		
-
-		select array(
-		SELECT DISTINCT (xpath('name()', child))[1]::varchar as attr FROM (
-		SELECT unnest(xpath('./child::node()[not(text()[normalize-space()]) and name() and not(name()="value") and (node() or @*)]', node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as "child") x
-WHERE 
-		length(trim(regexp_replace(child::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0
-) into pParsed;
-/* 
+				
+        BEGIN
 		
-*/
-		return pParsed;
-	END;
-$BODY$
-	LANGUAGE plpgsql
-	COST 100
-	CALLED ON NULL INPUT
-	SECURITY INVOKER
-	VOLATILE;
-ALTER FUNCTION "blender"."getnodechildnames"(IN xml) OWNER TO "ryanrife";
-
--- ----------------------------
---  Function structure for public.getnodeattributenames(xml)
--- ----------------------------
-DROP FUNCTION IF EXISTS "blender"."getnodeattributenames"(xml);
-CREATE FUNCTION "blender"."getnodeattributenames"(IN xml) RETURNS "_varchar" 
-	AS $BODY$
-        DECLARE
-                pParsed         varchar[];
-                node         	ALIAS FOR $1;		
-        BEGIN		
-
-		select array(
-		SELECT DISTINCT (xpath('name()', child))[1]::varchar as attr FROM (
-		SELECT unnest(xpath('./child::node()[text()[normalize-space()]]', node)) as "child") x
-WHERE 
-		length(trim(regexp_replace(child::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0
-) into pParsed;
-/* 
-		
-*/
-		return pParsed;
-	END;
-$BODY$
-	LANGUAGE plpgsql
-	COST 100
-	CALLED ON NULL INPUT
-	SECURITY INVOKER
-	VOLATILE;
-ALTER FUNCTION "blender"."getnodeattributenames"(IN xml) OWNER TO "ryanrife";
-
--- ----------------------------
---  Function structure for public.getuniquenodeattributes(_xml)
--- ----------------------------
-DROP FUNCTION IF EXISTS "blender"."getuniquenodeattributes"(_xml);
-CREATE FUNCTION "blender"."getuniquenodeattributes"(IN _xml)
- RETURNS TABLE("attribute" varchar) AS
-$BODY$
-        DECLARE
-		rec record;
-		tableName varchar;
-        BEGIN			
-
-	select (xpath('name()', $1[1], '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar into tableName;
-
-	RETURN QUERY select distinct attributes[1] as attribute from (select 
-		regexp_split_to_array(
-		replace(
-		(regexp_matches(replace((regexp_matches($1::varchar,'(<' || tableName || '\s.*?>)','g'))[1], '\"','"')
-		,'((\w|\w-\w)*\s*=\s*"[^"]*"|''[^'']*'')','g'))[1]::varchar
-		,'"','')
-		,'=')::varchar[] as attributes
-		) x where attributes[1] <> 'xmlns' and attributes[1] <> 'lang';
-	
-	END;
-$BODY$
-	LANGUAGE plpgsql
-	COST 100
-	ROWS 100
-	CALLED ON NULL INPUT
-	SECURITY INVOKER
-	STABLE;
-ALTER FUNCTION "blender"."getuniquenodeattributes"(IN _xml) OWNER TO "ryanrife";
-
--- ----------------------------
---  Function structure for public.emptytable(varchar)
--- ----------------------------
-DROP FUNCTION IF EXISTS "blender"."emptytable"(varchar);
-CREATE FUNCTION "blender"."emptytable"(IN varchar) RETURNS "bool" 
-	AS $BODY$
-        DECLARE
-		
-        BEGIN		
-	
-	IF EXISTS (
-		SELECT *
-		FROM pg_catalog.pg_tables 
-		WHERE tablename  = $1
-	) THEN
-		EXECUTE 'DELETE FROM "' || $1 || '"';
-	END IF;		
+	IF NOT EXISTS (SELECT $2 
+               FROM information_schema.columns 
+               WHERE table_schema='blender' and table_name=$1 and column_name=$2) THEN
+		EXECUTE 'ALTER TABLE "' || $1 || '" ADD COLUMN "' || $2 || '" character varying';
+	END IF;
 	
 	RETURN TRUE;
 	END;
@@ -363,31 +381,10 @@ $BODY$
 	CALLED ON NULL INPUT
 	SECURITY INVOKER
 	VOLATILE;
-ALTER FUNCTION "blender"."emptytable"(IN varchar) OWNER TO "ryanrife";
+ALTER FUNCTION "blender"."addtableattr"(IN varchar, IN varchar) OWNER TO "ryanrife";
 
 -- ----------------------------
---  Function structure for public.importimagegroupnode(xml, _varchar)
--- ----------------------------
-DROP FUNCTION IF EXISTS "blender"."importimagegroupnode"(xml, _varchar);
-CREATE FUNCTION "blender"."importimagegroupnode"(IN xml, IN _varchar) RETURNS "bool" 
-	AS $BODY$DECLARE
-
-BEGIN
-
-select * from image;
-
-
-	RETURN true;
-END;$BODY$
-	LANGUAGE plpgsql
-	COST 100
-	CALLED ON NULL INPUT
-	SECURITY INVOKER
-	VOLATILE;
-ALTER FUNCTION "blender"."importimagegroupnode"(IN xml, IN _varchar) OWNER TO "ryanrife";
-
--- ----------------------------
---  Function structure for public.importcatalog(varchar)
+--  Function structure for blender.importcatalog(varchar)
 -- ----------------------------
 DROP FUNCTION IF EXISTS "blender"."importcatalog"(varchar);
 CREATE FUNCTION "blender"."importcatalog"(IN varchar) RETURNS "bool" 
@@ -405,7 +402,7 @@ CREATE FUNCTION "blender"."importcatalog"(IN varchar) RETURNS "bool"
 		SELECT unnest(xpath('//n:catalog', pg_read_file($1, 0, 500000000)::xml, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) AS c
 	) SELECT * FROM cat;
 
-	CREATE TEMP TABLE nodenames on COMMIT DROP AS SELECT DISTINCT (xpath('name()', c))[1]::varchar as tableName FROM (Select unnest(xpath('//n:catalog/node()', c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as c from _catalog) ca WHERE length(trim(regexp_replace(c::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0;
+	--CREATE TEMP TABLE nodenames on COMMIT DROP AS SELECT DISTINCT (xpath('name()', c))[1]::varchar as tableName FROM (Select unnest(xpath('//n:catalog/node()', c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as c from _catalog) ca WHERE length(trim(regexp_replace(c::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0;
 		
 	SELECT (xpath('//n:catalog/@catalog-id', c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar INTO catalogId from _catalog;
 
@@ -423,15 +420,13 @@ CREATE FUNCTION "blender"."importcatalog"(IN varchar) RETURNS "bool"
 	perform emptytable('category-page-attributes');
 	perform emptytable('category-refinement-definition');
 	
-	FOR rec IN SELECT * FROM nodenames
+	FOR rec IN SELECT UNNEST(xpath('//n:catalog/node()[node() or text()]', c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) AS node FROM _catalog
 	LOOP
-		IF rec.tableName <> 'header' THEN			
+		tableName := (xpath('name()', rec.node))[1]::varchar;
 
-			FOR rec IN SELECT c as node FROM (Select unnest(xpath('//n:catalog/n:' || rec.tableName, c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as c from _catalog) ca WHERE length(trim(regexp_replace(c::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0
-			LOOP
-				perform importcatalogxmlnode ( rec.node, null, ARRAY[['catalog-id',catalogId]]); --, ARRAY[['product-id', (xpath('/n:product/@product-id', rec.node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar ]] );					
-			END LOOP;
-		ELSE 
+		IF tableName <> 'header' THEN			
+			perform importcatalogxmlnode ( rec.node, null, ARRAY[['catalog-id',catalogId]]); --, ARRAY[['product-id', (xpath('/n:product/@product-id', rec.node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar ]] );					
+		ELSE
 			perform emptytable('header');
 			perform emptytable('header-external-location');
 			perform emptytable('header-image-settings');
@@ -439,7 +434,6 @@ CREATE FUNCTION "blender"."importcatalog"(IN varchar) RETURNS "bool"
 	
 			perform importheaderxmlnode((SELECT (xpath('//n:catalog/n:header', c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1] as c from _catalog), 'catalog', ARRAY[['catalog-id',catalogId]]);
 		END IF;
-
 	END LOOP;
 
 
@@ -457,13 +451,13 @@ $BODY$
 ALTER FUNCTION "blender"."importcatalog"(IN varchar) OWNER TO "ryanrife";
 
 -- ----------------------------
---  Function structure for public.importheaderxmlnode(xml, varchar, _varchar)
+--  Function structure for blender.importheaderxmlnode(xml, varchar, _varchar)
 -- ----------------------------
 DROP FUNCTION IF EXISTS "blender"."importheaderxmlnode"(xml, varchar, _varchar);
 CREATE FUNCTION "blender"."importheaderxmlnode"(IN xml, IN varchar, IN _varchar) RETURNS "bool" 
 	AS $BODY$DECLARE
 	skiptables varchar[] := (ARRAY['view-types'])::varchar[];
-	parenttables varchar[] := ARRAY['header'];
+	parenttables varchar[] := (ARRAY[])::varchar[];
 	rec record;
 	tableName varchar;
 	attrName varchar;
@@ -567,9 +561,7 @@ BEGIN
 	END IF;
 	
 	RETURN TRUE;
-EXCEPTION WHEN OTHERS THEN
-        RAISE NOTICE 'failed to import %', $1::varchar;
-        RETURN TRUE;
+
 END;
 $BODY$
 	LANGUAGE plpgsql
