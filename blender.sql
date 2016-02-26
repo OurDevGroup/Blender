@@ -1,6 +1,61 @@
 CREATE SCHEMA IF NOT EXISTS blender;
 
 -- ----------------------------
+--  Function structure for blender.settablecolumndatatype(_varchar)
+-- ----------------------------
+DROP FUNCTION IF EXISTS "blender"."settablecolumndatatype"(_varchar);
+CREATE FUNCTION "blender"."settablecolumndatatype"(IN _varchar) RETURNS "bool" 
+	AS $BODY$DECLARE
+	tableList ALIAS for $1;
+	rec record;
+BEGIN
+	FOR i IN array_lower(tableList, 1) .. array_upper(tableList, 1)
+	LOOP
+
+		FOR rec IN SELECT * FROM information_schema.columns WHERE table_schema='blender' and table_name=tableList[i]
+		LOOP
+			IF rec.data_type='character varying' THEN
+				IF (SELECT iscolumndate(rec.table_name, rec.column_name)) THEN
+					EXECUTE 'ALTER TABLE "' || rec.table_name || '" ALTER COLUMN "' || rec.column_name || '" TYPE timestamp USING "' || rec.column_name || '"::timestamp';
+				ELSEIF (SELECT iscolumnbool(rec.table_name, rec.column_name)) THEN
+					EXECUTE 'ALTER TABLE "' || rec.table_name || '" ALTER COLUMN "' || rec.column_name || '" TYPE bool USING "' || rec.column_name || '"::bool';
+				END IF;
+			END IF;
+		END LOOP;
+
+	END LOOP;
+
+
+	RETURN true;
+END;$BODY$
+	LANGUAGE plpgsql
+	COST 100
+	CALLED ON NULL INPUT
+	SECURITY INVOKER
+	VOLATILE;
+ALTER FUNCTION "blender"."settablecolumndatatype"(IN _varchar) OWNER TO "ryanrife";
+
+-- ----------------------------
+--  Function structure for blender.iscolumnbool(varchar, varchar)
+-- ----------------------------
+DROP FUNCTION IF EXISTS "blender"."iscolumnbool"(varchar, varchar);
+CREATE FUNCTION "blender"."iscolumnbool"(IN varchar, IN varchar) RETURNS "bool" 
+	AS $BODY$DECLARE
+	tableName ALIAS FOR $1;	
+	columnName ALIAS FOR $2;	
+	returnVal bool;
+BEGIN
+	EXECUTE 'select (select count("' || columnName || '") from "' || tableName || '" where "' || columnName || '" is not null and "' || columnName || '" ~ E''^(true|false)$'') = (select count("' || columnName || '") from "' || tableName || '" where "' || columnName || '" is not null)' INTO returnVal;
+	RETURN returnVal;
+END;$BODY$
+	LANGUAGE plpgsql
+	COST 100
+	CALLED ON NULL INPUT
+	SECURITY INVOKER
+	STABLE;
+ALTER FUNCTION "blender"."iscolumnbool"(IN varchar, IN varchar) OWNER TO "ryanrife";
+
+-- ----------------------------
 --  Function structure for blender.getnodeattributes(xml)
 -- ----------------------------
 DROP FUNCTION IF EXISTS "blender"."getnodeattributes"(xml);
@@ -27,34 +82,6 @@ $BODY$
 	SECURITY INVOKER
 	VOLATILE;
 ALTER FUNCTION "blender"."getnodeattributes"(IN xml) OWNER TO "ryanrife";
-
--- ----------------------------
---  Function structure for blender.createtablenode(varchar)
--- ----------------------------
-DROP FUNCTION IF EXISTS "blender"."createtablenode"(varchar);
-CREATE FUNCTION "blender"."createtablenode"(IN varchar) RETURNS "bool" 
-	AS $BODY$
-        DECLARE
-		
-        BEGIN		
-	
-	IF NOT EXISTS (
-		SELECT *
-		FROM pg_catalog.pg_tables 
-		WHERE tablename  = $1
-	) THEN
-		EXECUTE 'CREATE TABLE "' || $1 || '"()';
-	END IF;		
-	
-	RETURN TRUE;
-	END;
-$BODY$
-	LANGUAGE plpgsql
-	COST 100
-	CALLED ON NULL INPUT
-	SECURITY INVOKER
-	VOLATILE;
-ALTER FUNCTION "blender"."createtablenode"(IN varchar) OWNER TO "ryanrife";
 
 -- ----------------------------
 --  Function structure for blender.decodeentities(varchar)
@@ -384,71 +411,32 @@ $BODY$
 ALTER FUNCTION "blender"."addtableattr"(IN varchar, IN varchar) OWNER TO "ryanrife";
 
 -- ----------------------------
---  Function structure for blender.importcatalog(varchar)
+--  Function structure for blender.createtablenode(varchar)
 -- ----------------------------
-DROP FUNCTION IF EXISTS "blender"."importcatalog"(varchar);
-CREATE FUNCTION "blender"."importcatalog"(IN varchar) RETURNS "bool" 
-	AS $BODY$
-        DECLARE
-		rec record;
-		tableName varchar;
-		catalogId varchar;
-        BEGIN		
-
-	CREATE TEMP TABLE _keyval (key character varying, val character varying, lang character varying) ON COMMIT DROP;
-
-	CREATE TEMP TABLE _catalog ON COMMIT DROP AS 
-	WITH cat AS (
-		SELECT unnest(xpath('//n:catalog', pg_read_file($1, 0, 500000000)::xml, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) AS c
-	) SELECT * FROM cat;
-
-	--CREATE TEMP TABLE nodenames on COMMIT DROP AS SELECT DISTINCT (xpath('name()', c))[1]::varchar as tableName FROM (Select unnest(xpath('//n:catalog/node()', c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as c from _catalog) ca WHERE length(trim(regexp_replace(c::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0;
-		
-	SELECT (xpath('//n:catalog/@catalog-id', c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar INTO catalogId from _catalog;
-
-	perform emptytable('product');
-	perform emptytable('product-custom-attributes');
-	perform emptytable('product-image');
-	perform emptytable('product-page-attributes');	
-	perform emptytable('product-variant');
-	perform emptytable('product-variation-attribute-value');
-
-	perform emptytable('category');
-	perform emptytable('category-assignment');
-	perform emptytable('category-attribute-group');
-	perform emptytable('category-custom-attributes');
-	perform emptytable('category-page-attributes');
-	perform emptytable('category-refinement-definition');
+DROP FUNCTION IF EXISTS "blender"."createtablenode"(varchar);
+CREATE FUNCTION "blender"."createtablenode"(IN varchar) RETURNS "bool" 
+	AS $BODY$DECLARE
 	
-	FOR rec IN SELECT UNNEST(xpath('//n:catalog/node()[node() or text()]', c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) AS node FROM _catalog
-	LOOP
-		tableName := (xpath('name()', rec.node))[1]::varchar;
+BEGIN		
 
-		IF tableName <> 'header' THEN			
-			perform importcatalogxmlnode ( rec.node, null, ARRAY[['catalog-id',catalogId]]); --, ARRAY[['product-id', (xpath('/n:product/@product-id', rec.node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar ]] );					
-		ELSE
-			perform emptytable('header');
-			perform emptytable('header-external-location');
-			perform emptytable('header-image-settings');
-			perform emptytable('header-view-type');	
-	
-			perform importheaderxmlnode((SELECT (xpath('//n:catalog/n:header', c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1] as c from _catalog), 'catalog', ARRAY[['catalog-id',catalogId]]);
-		END IF;
-	END LOOP;
+IF NOT EXISTS (
+	SELECT *
+	FROM pg_catalog.pg_tables 
+	WHERE tablename  = $1
+) THEN
+	EXECUTE 'CREATE TABLE "' || $1 || '"()';
+	INSERT INTO _newtables ( tableName) VALUES ( $1 );
+END IF;		
 
-
-
-
-	
-	RETURN TRUE;
-	END;
+RETURN TRUE;
+END;
 $BODY$
 	LANGUAGE plpgsql
 	COST 100
 	CALLED ON NULL INPUT
 	SECURITY INVOKER
 	VOLATILE;
-ALTER FUNCTION "blender"."importcatalog"(IN varchar) OWNER TO "ryanrife";
+ALTER FUNCTION "blender"."createtablenode"(IN varchar) OWNER TO "ryanrife";
 
 -- ----------------------------
 --  Function structure for blender.importheaderxmlnode(xml, varchar, _varchar)
@@ -570,4 +558,116 @@ $BODY$
 	SECURITY INVOKER
 	VOLATILE;
 ALTER FUNCTION "blender"."importheaderxmlnode"(IN xml, IN varchar, IN _varchar) OWNER TO "ryanrife";
+
+-- ----------------------------
+--  Function structure for blender.iscolumnnumeric(varchar, varchar)
+-- ----------------------------
+DROP FUNCTION IF EXISTS "blender"."iscolumnnumeric"(varchar, varchar);
+CREATE FUNCTION "blender"."iscolumnnumeric"(IN varchar, IN varchar) RETURNS "bool" 
+	AS $BODY$--iscolumnnumeric
+DECLARE
+	tableName ALIAS FOR $1;	
+	columnName ALIAS FOR $2;	
+	returnVal bool;
+BEGIN
+	EXECUTE 'select (select count("' || columnName || '") from "' || tableName || '" where "' || columnName || '" is not null and "' || columnName || '" ~ E''^\\d+$'') = (select count("' || columnName || '") from "' || tableName || '" where "' || columnName || '" is not null)' INTO returnVal;
+	RETURN returnVal;
+END;$BODY$
+	LANGUAGE plpgsql
+	COST 1000
+	CALLED ON NULL INPUT
+	SECURITY INVOKER
+	STABLE;
+ALTER FUNCTION "blender"."iscolumnnumeric"(IN varchar, IN varchar) OWNER TO "ryanrife";
+
+-- ----------------------------
+--  Function structure for blender.importcatalog(varchar)
+-- ----------------------------
+DROP FUNCTION IF EXISTS "blender"."importcatalog"(varchar);
+CREATE FUNCTION "blender"."importcatalog"(IN varchar) RETURNS "bool" 
+	AS $BODY$
+        DECLARE
+		rec record;
+		tableName varchar;
+		catalogId varchar;
+        BEGIN		
+
+	CREATE TEMP TABLE _keyval (key character varying, val character varying, lang character varying) ON COMMIT DROP;
+	CREATE TEMP TABLE _newtables (tableName character varying) ON COMMIT DROP;
+
+	CREATE TEMP TABLE _catalog ON COMMIT DROP AS 
+	WITH cat AS (
+		SELECT unnest(xpath('//n:catalog', pg_read_file($1, 0, 500000000)::xml, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) AS c
+	) SELECT * FROM cat;
+
+	--CREATE TEMP TABLE nodenames on COMMIT DROP AS SELECT DISTINCT (xpath('name()', c))[1]::varchar as tableName FROM (Select unnest(xpath('//n:catalog/node()', c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) as c from _catalog) ca WHERE length(trim(regexp_replace(c::varchar, E'[\\n\\r]+', ' ', 'g' ))) > 0;
+		
+	SELECT (xpath('//n:catalog/@catalog-id', c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar INTO catalogId from _catalog;
+
+	perform emptytable('product');
+	perform emptytable('product-custom-attributes');
+	perform emptytable('product-image');
+	perform emptytable('product-page-attributes');	
+	perform emptytable('product-variant');
+	perform emptytable('product-variation-attribute-value');
+
+	perform emptytable('category');
+	perform emptytable('category-assignment');
+	perform emptytable('category-attribute-group');
+	perform emptytable('category-custom-attributes');
+	perform emptytable('category-page-attributes');
+	perform emptytable('category-refinement-definition');
+	
+	FOR rec IN SELECT UNNEST(xpath('//n:catalog/node()[node() or text()]', c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}')) AS node FROM _catalog
+	LOOP
+		tableName := (xpath('name()', rec.node))[1]::varchar;
+
+		IF tableName <> 'header' THEN			
+			perform importcatalogxmlnode ( rec.node, null, ARRAY[['catalog-id',catalogId]]); --, ARRAY[['product-id', (xpath('/n:product/@product-id', rec.node, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1]::varchar ]] );					
+		ELSE
+			perform emptytable('header');
+			perform emptytable('header-external-location');
+			perform emptytable('header-image-settings');
+			perform emptytable('header-view-type');	
+	
+			perform importheaderxmlnode((SELECT (xpath('//n:catalog/n:header', c, '{{n, http://www.demandware.com/xml/impex/catalog/2006-10-31}}'))[1] as c from _catalog), 'catalog', ARRAY[['catalog-id',catalogId]]);
+		END IF;
+	END LOOP;
+
+
+	FOR rec IN SELECT * FROM _newtables
+	LOOP
+		perform settablecolumndatatype(ARRAY[rec.tableName]);
+	END LOOP;
+
+	
+	RETURN TRUE;
+	END;
+$BODY$
+	LANGUAGE plpgsql
+	COST 100
+	CALLED ON NULL INPUT
+	SECURITY INVOKER
+	VOLATILE;
+ALTER FUNCTION "blender"."importcatalog"(IN varchar) OWNER TO "ryanrife";
+
+-- ----------------------------
+--  Function structure for blender.iscolumndate(varchar, varchar)
+-- ----------------------------
+DROP FUNCTION IF EXISTS "blender"."iscolumndate"(varchar, varchar);
+CREATE FUNCTION "blender"."iscolumndate"(IN varchar, IN varchar) RETURNS "bool" 
+	AS $BODY$DECLARE
+	tableName ALIAS FOR $1;	
+	columnName ALIAS FOR $2;	
+	returnVal bool;
+BEGIN
+	EXECUTE 'select (select count("' || columnName || '") from "' || tableName || '" where "' || columnName || '" is not null and "' || columnName || '" ~ E''^(([0-9]+-[0-9]+-[0-9]+T[0-2]\\d:[0-5]\\d:[0-5]\\d\\.\\d+)|(\\d{4}-[01]\\d-[0-3]\\dT[0-2]\\d:[0-5]\\d:[0-5]\\d)|(\\d{4}-[01]\\d-[0-3]\\dT[0-2]\\d:[0-5]\\d)*.)\\w$'') = (select count("' || columnName || '") from "' || tableName || '" where "' || columnName || '" is not null)' INTO returnVal;
+	RETURN returnVal;
+END;$BODY$
+	LANGUAGE plpgsql
+	COST 100
+	CALLED ON NULL INPUT
+	SECURITY INVOKER
+	STABLE;
+ALTER FUNCTION "blender"."iscolumndate"(IN varchar, IN varchar) OWNER TO "ryanrife";
 
