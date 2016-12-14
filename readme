@@ -1,0 +1,26 @@
+Blender - Demandware data import/export toolset.
+
+
+Setup Instructions
+------------------
+1. install Postgres
+2. setup your Postgres data directory as-needed
+3. run blender.sql to create schema and functions
+
+
+Importing Demandware Catalog
+----------------------------
+1. from Buiness Manager, navigate to Merchant Tools > [site] > Products and Catalogs > Import & Export
+2. choose "Export" under the "Catalogs" section
+3. export the desired catalog
+4. download the catalog export XML file into the Postgres data directory
+5. from the blender schema in Postgres, execute the following query "select importcatalog('[xml export filename]');"
+
+...after several minutes, the catalog should be fully imported into the blender schema with associated tables.
+
+
+Limitations
+-----------
+-Currently does not support site-specific attribute values
+-PKs & FKs are not configured
+-All values are imported as varchar, then converted to bool & timestamp as-detected
