@@ -1,5 +1,6 @@
 import xml.sax
 import csv
+import sys
 
 class XmlHandler ( xml.sax.ContentHandler):
     tree = []
@@ -61,9 +62,11 @@ class XmlHandler ( xml.sax.ContentHandler):
 
     def isInCatalog (self):
         return len(self.tree) > 0 and self.tree[len(self.tree)-1] == "catalog" 
-       
 
-filename = "miniCatalog.xml"
+if len(sys.argv) != 2:
+    print "You're doing it wrong!"
+
+filename = sys.argv[1]
 handler = XmlHandler()
 xml.sax.parse (filename, handler)
 with open('products.csv', 'w') as csvfile:
