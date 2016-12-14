@@ -24,3 +24,8 @@ Limitations
 -Currently does not support site-specific attribute values
 -PKs & FKs are not configured
 -All values are imported as varchar, then converted to bool & timestamp as-detected
+
+
+Command Line Tools
+------------------
+dwCatalog2CSV.py [filename.xml] - extracts product information from DW catalog export and coverts it to a CSV file.
