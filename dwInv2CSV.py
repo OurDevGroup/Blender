@@ -70,6 +70,8 @@ class XmlHandler ( xml.sax.ContentHandler):
                 writer.writeheader()
                 for p in handler.invs:
                     writer.writerow(p)
+                
+            self.invs = []
 
         self.value = None
         self.tree.pop()

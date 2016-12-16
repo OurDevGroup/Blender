@@ -28,7 +28,6 @@ class XmlHandler ( xml.sax.ContentHandler):
         if name == 'price-table':
             self.price = {}
             self.price['currency'] = self.currency
-            self.price['pricebook'] = self.pricebook
             self.price['online'] = self.online
             self.price['product-id'] = attrs.get('product-id')
 
@@ -62,6 +61,20 @@ class XmlHandler ( xml.sax.ContentHandler):
         if self.isInPriceTable() and name == 'price-table':
             self.prices.append(self.price)
 
+        if name == 'pricebook':
+            with open(((self.pricebook + '.csv') if self.pricebook != None else 'price.csv'), 'w') as csvfile:
+                fieldnames = set([])
+                for p in handler.prices:
+                    for key in p:
+                        fieldnames.add(key)
+
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                for p in handler.prices:
+                    writer.writerow(p)
+            
+            self.prices = []
+
         self.value = None
         self.tree.pop()
         return
@@ -93,18 +106,6 @@ if len(sys.argv) < 2:
     sys.exit()
 
 filename = sys.argv[1]
-outputfile = sys.argv[2] if len(sys.argv) == 3 else None
 handler = XmlHandler()
 xml.sax.parse (filename, handler)
-with open((outputfile if outputfile != None else 'price.csv'), 'w') as csvfile:
-    fieldnames = set([])
-    for p in handler.prices:
-        for key in p:
-            fieldnames.add(key)
-
-    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-    writer.writeheader()
-    for p in handler.prices:
-        writer.writerow(p)
-
 print "Done."
