@@ -28,4 +28,5 @@ Limitations
 
 Command Line Tools
 ------------------
-dwCatalog2CSV.py [filename.xml] - extracts product information from DW catalog export and coverts it to a CSV file.
+dwProd2CSV.py catalog.xml [output.csv] - extracts product information from DW catalog export and coverts it to a CSV file.
+dwCat2CSV.py catalog.xml [output.csv] - extracts category information from DW catalog export and coverts it to a CSV file.
