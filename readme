@@ -24,9 +24,13 @@ Limitations
 -Currently does not support site-specific attribute values
 -PKs & FKs are not configured
 -All values are imported as varchar, then converted to bool & timestamp as-detected
+-Large catalogs (300MB+) take a long time, use the CMD line tools to export CSV, then import CSV to DB
 
 
 Command Line Tools
 ------------------
 dwProd2CSV.py catalog.xml [output.csv] - extracts product information from DW catalog export and coverts it to a CSV file.
 dwCat2CSV.py catalog.xml [output.csv] - extracts category information from DW catalog export and coverts it to a CSV file.
+dwProdCat2CSV.py catalog.xml [output.csv] - extracts product/category relations from DW catalog and outputs a CSV files.
+dwPrice2CSV.py pricebook.xml - extracts price book information from DW pricing export XML and outs a CSV file for defined price books.
+dwInv2CSV.py inventory.xml - extracts inventory information from DW pricing export XML and outs a CSV file for defined inventory list.
