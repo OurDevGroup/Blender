@@ -8,6 +8,7 @@ class XmlHandler ( xml.sax.ContentHandler):
     variants = {}
     products = []
     value = None
+    values = []
     lang = None
     custAttr = None
     pid = None
@@ -18,7 +19,8 @@ class XmlHandler ( xml.sax.ContentHandler):
     def startElement ( self, name, attrs):   
         self.value = None
         self.lang = None
-        self.custAttr = None
+        if name != 'value':
+            self.custAttr = None
         if self.isInCatalog() and name == "product":
             self.product = {}
             for n in attrs.keys():
@@ -28,16 +30,25 @@ class XmlHandler ( xml.sax.ContentHandler):
         if attrs.get("xml:lang") != 'x-default':
             self.lang = attrs.get("xml:lang")
         self.tree.append(name)
-        if self.isCustomAttr():
+        if name == 'custom-attribute':
             self.custAttr = attrs.get("attribute-id")
+        if name != 'value':
+            self.values = []
         return
 
     def endElement ( self, name):        
+        if self.value != None and self.value.strip() != '' and name == 'value':
+            self.values.append(self.value)
+
         if self.value != None and self.value.strip() != '' and self.tree[len(self.tree)-2] == "product":  
-                self.product[name + ('-' + self.lang if self.lang != None else '')] = unicode(self.value).encode("utf-8")
+            self.product[name + ('-' + self.lang if self.lang != None else '')] = unicode(self.value).encode("utf-8")
         
-        if self.value != None and self.value.strip() != '' and self.isCustomAttr() and self.custAttr != None:
-            self.product['custom-' + self.custAttr] = unicode(self.value).encode("utf-8")
+        if ((self.value != None and self.value.strip() != '') or len(self.values) > 0) and name == 'custom-attribute' and self.custAttr != None: 
+            if len(self.values) > 0:
+                for v in range(0, len(self.values)):
+                    self.product['custom-' + self.custAttr + "-value-" + str(v)] = unicode(self.values[v]).encode("utf-8")
+            else:                       
+                self.product['custom-' + self.custAttr] = unicode(self.value).encode("utf-8")
         
         if self.value != None and self.value.strip() != '' and self.isPageAttr():
             self.product[name] = unicode(self.value).encode("utf-8")
